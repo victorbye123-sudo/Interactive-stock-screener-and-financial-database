@@ -1742,10 +1742,11 @@ def structured_html(
   /* The screener is a responsive column: never <360px, scales with viewport, capped for readability */
   .grid{
   display:grid;
-  grid-template-columns: minmax(0, 1fr) clamp(360px, 26vw, 560px); /* left grows, right is a responsive column */
+  grid-template-columns: minmax(0, 1fr) clamp(360px, 26vw, 560px);
   gap:16px;
   width:100%;
-  max-width:100vw;            /* remove 1200px cap */
+  max-width:100vw;
+}
   margin:14px auto;
   padding:0 14px;
   align-items:start;
@@ -2461,8 +2462,8 @@ async function loadFinancials(ticker, { fromHover=false } = {}){
   if(finAbort) finAbort.abort();
   finAbort = new AbortController();
   try{
-    const freq  = (document.getElementById('periodSelect')?.value || 'Annual').toLowerCase();
-const units = (document.getElementById('unitsSelect')?.value  || 'Millions').toLowerCase();
+    const freq  = (document.getElementById('periodSelect')?.value || 'annual').toLowerCase();
+const units = (document.getElementById('unitsSelect')?.value  || 'millions').toLowerCase();
 const url = `/financials/${encodeURIComponent(ticker)}/structured.html?freq=${freq}&units=${units}&ts=${Date.now()}`;
     const res = await fetch(url, { signal: finAbort.signal, cache: 'no-store' });
     if(!res.ok) throw new Error(`HTTP ${res.status}`);
