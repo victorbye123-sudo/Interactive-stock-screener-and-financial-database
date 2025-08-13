@@ -1678,7 +1678,7 @@ def _build_matrix_any(
 
 @app.get("/financials/{ticker}/structured.html", response_class=HTMLResponse)
 def structured_html(
-    ticker: str,
+    ticker: str, request: Request,
     freq: Literal["annual","quarterly"]="annual",
     order: Literal["asc","desc"]="desc",
 ):
@@ -1689,7 +1689,18 @@ def structured_html(
     cf_rows, meta_cf = _build_matrix_any(ticker, CASH_FLOW_LAYOUT, freq=freq, order=order)
 
     years = meta_bs["years"]  # all three share the same axis by construction
+    # Units scaler (billions/millions/thousands); default to "millions"
+    units_param = (request.query_params.get("units") or "millions").strip().lower()
+    _SCALE = {"billions": 1_000_000_000, "millions": 1_000_000, "thousands": 1_000}
+    _scale = _SCALE.get(units_param, 1_000_000)
 
+    def _fmt_scaled(v):
+        if v is None:
+            return "–"
+        try:
+            return _fmt_fin(float(v) / _scale)
+        except Exception:
+            return _fmt_fin(v)
     def render_table(title: str, rows: list, years: list[str]) -> str:
         th_years = "".join(f"<th class='year'>{y}</th>" for y in years)
         body = []
@@ -1703,7 +1714,7 @@ def structured_html(
             indent_px = 18 * r.get("indent", 0)
             row_cls = "total" if r.get("is_total") else ""
             tds = [f"<td class='label' style='padding-left:{indent_px}px'>{r['label']}</td>"]
-            tds += [f"<td class='val'>{_fmt_fin(v)}</td>" for v in r["values"]]
+            tds += [f"<td class='val'>{_fmt_scaled(v)}</td>" for v in r["values"]]
             body.append(f"<tr class='{row_cls}'>{''.join(tds)}</tr>")
         colgroup = "<col class='c-label'/>" + "".join("<col class='c-year'/>" for _ in years)
         return f"""
@@ -2113,6 +2124,10 @@ def home():
     #finHScroll::-webkit-scrollbar{ height: 12px; }
     #finHScroll::-webkit-scrollbar-thumb{ background:#d4c8b3; border-radius:8px; }
     #finHScrollInner{ height:1px; }
+    /* TradingView-style compact overrides */
+.toolbar select { margin-right: 8px; }
+.chip { border-radius: 10px; padding: 6px 8px; }
+.seg button { padding: 6px 8px; }
   </style>
 </head>
 <body>
@@ -2125,8 +2140,16 @@ def home():
           <input id="tickerInput" placeholder="Type ticker or name…" style="width:260px" aria-label="Ticker search">
           <div id="taList" class="ta-list" role="listbox" aria-label="Suggestions"></div>
         </div>
-        <button class="btn secondary" onclick="downloadXLSX()">Download XLSX</button>
-        <button class="btn secondary" onclick="downloadCSV()">Download CSV</button>
+        <select id="periodSelect" title="Period">
+  <option value="annual" selected>Annual</option>
+  <option value="quarterly">Quarterly</option>
+</select>
+
+<select id="unitsSelect" title="Units">
+  <option value="billions">Billions</option>
+  <option value="millions" selected>Millions</option>
+  <option value="thousands">Thousands</option>
+</select>
         <span class="note" id="finStatus"></span>
         <span style="flex:1"></span>
         <input id="finSearch" placeholder="Search rows…" style="width:220px" aria-label="Filter lines">
@@ -2139,38 +2162,14 @@ def home():
       <h2 class="h">Screener</h2>
       <div class="row" style="margin-bottom:6px">
         <b style="letter-spacing:.02em">Universe</b>
-        <button class="btn" onclick="bootstrapUS()">Bootstrap US</button>
-        <button class="btn secondary" onclick="bootstrapGlobal()">Bootstrap Global</button>
+        <button class="btn" onclick="bootstrapUS()">US</button>
+        <button class="btn secondary" onclick="bootstrapGlobal()">Global</button>
         <button class="btn secondary" onclick="addCustom()">Add custom</button>
         <span class="note" id="ucount"></span>
       </div>
 
-      <div class="row" style="margin-bottom:6px">
-        <b style="letter-spacing:.02em">Ingest</b>
-        <input id="tickers" placeholder="(Optional) AAPL,MSFT,RY.TO,7203.T,0700.HK" style="width:320px"/>
-        <button class="btn" onclick="ingestSome()">Ingest</button>
-      </div>
-
-      <!-- Refresh stale metrics (clarified with Advanced options) -->
-<div class="block">
-  <div class="block-head">
-    <b>Refresh stale metrics</b>
-    <span class="hint" title="Updates metrics that are older than the hours you set. Uses multiple threads for speed.">?</span>
-  </div>
-  <div class="row">
-    <label class="note">older than (hrs)</label>
-    <input id="ttl" value="24" style="width:90px"/>
-    <button class="btn" onclick="ingestAll()">Run</button>
-    <span class="note" id="ingmsg"></span>
-    <button class="btn secondary" onclick="toggleAdvanced()" style="margin-left:auto">Advanced</button>
-  </div>
-  <div id="advRefresh" class="adv hide">
-    <div class="row" style="margin-top:6px">
-      <label class="note">max symbols</label><input id="lim" value="1500" style="width:100px"/>
-      <label class="note">parallel threads</label><input id="par" value="8" style="width:100px"/>
-    </div>
-  </div>
-</div>
+      
+      
 
       <div class="row" style="margin-bottom:6px">
         <div class="chips" id="chips">
@@ -2462,7 +2461,9 @@ async function loadFinancials(ticker, { fromHover=false } = {}){
   if(finAbort) finAbort.abort();
   finAbort = new AbortController();
   try{
-    const url = `/financials/${encodeURIComponent(ticker)}/structured.html?ts=${Date.now()}`;
+    const freq  = (document.getElementById('periodSelect')?.value || 'Annual').toLowerCase();
+const units = (document.getElementById('unitsSelect')?.value  || 'Millions').toLowerCase();
+const url = `/financials/${encodeURIComponent(ticker)}/structured.html?freq=${freq}&units=${units}&ts=${Date.now()}`;
     const res = await fetch(url, { signal: finAbort.signal, cache: 'no-store' });
     if(!res.ok) throw new Error(`HTTP ${res.status}`);
     const html = await res.text();
@@ -2577,6 +2578,24 @@ document.addEventListener('DOMContentLoaded', ()=>{
 
   buildSectorChips();
   refreshCount();
+    // Wire dropdowns: reload current ticker when user changes Period/Units
+  const pSel = document.getElementById('periodSelect');
+  const uSel = document.getElementById('unitsSelect');
+  const _current = ()=> (document.getElementById('tickerInput').value || 'AAPL').trim();
+  if (pSel) pSel.addEventListener('change', ()=> loadFinancials(_current()));
+  if (uSel) uSel.addEventListener('change', ()=> loadFinancials(_current()));
+
+  // First-run: if universe is empty, bootstrap all US tickers automatically
+  try {
+    const c = await (await fetch('/universe/count', {cache:'no-store'})).json();
+    if ((c.count||0) === 0) {
+      const res = await fetch('/universe/bootstrap_us', {method:'POST'});
+      if (res.ok) {
+        await refreshCount();   // update the counter
+        run();                  // re-run screener to pull from the new universe
+      }
+    }
+  } catch (_) {}
   loadFinancials('AAPL');
   run();
   requestAnimationFrame(()=> updateFinScrollbarGeometry());
